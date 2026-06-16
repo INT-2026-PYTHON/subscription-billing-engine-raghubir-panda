@@ -35,8 +35,35 @@ class TieredPricing(PricingStrategy):
 
     def __init__(self, tiers: list[Tier]) -> None:
         # TODO Day 1
-        raise NotImplementedError("Day 1: implement TieredPricing.__init__")
+        if not tiers:
+            raise ValueError("Tiers must not be empty.")
+        for i in range(len(tiers)-1):
+            if tiers[i+1].from_units != tiers[i].to_units:
+                raise ValueError("Not contiguous.")
+        if tiers[-1].to_units is not None:
+            raise ValueError("Last one must be of 'None' type.")
+        currency = tiers[0].unit_price.currency
+        for c in tiers:
+            if c.unit_price.currency != currency:
+                raise ValueError("Currency must be same for everyone.")
+        self.tiers = tiers
+
 
     def calculate(self, quantity: int) -> Money:
         # TODO Day 1
-        raise NotImplementedError("Day 1: implement TieredPricing.calculate")
+        if quantity < 0:
+            raise ValueError("Quantity must not be negative.")
+        currency = self.tiers[0].unit_price.currency
+        total = Money.zero(currency)
+        for ti in self.tiers:
+            if quantity < ti.from_units:
+                break
+            if ti.to_units is None:
+                units = quantity - ti.from_units
+            elif quantity > ti.from_units:
+               units = min(quantity, ti.to_units) - ti.from_units
+            else: 
+                units = 0
+            total = total + ti.unit_price * units
+        
+        return total
