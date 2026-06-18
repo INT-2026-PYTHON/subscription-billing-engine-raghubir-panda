@@ -58,8 +58,103 @@ class BillingCycle:
     def run(self, as_of: date) -> BillingResult:
         """Bill all subscriptions whose current period ends on or before `as_of`."""
         # TODO Day 3
-        raise NotImplementedError("Day 3: implement BillingCycle.run")
 
+        import sqlite3
+        from datetime import date, datetime
+        from billing_engine.models import SubscriptionStatus, LedgerEntry, LedgerDirection, InvoiceStatus
+        from .pipeline import build_invoice
+
+        invoices_created = 0
+        invoices_skipped = 0
+        trials_activated = 0
+
+        for sub in self.subscription_repo.list_all():
+            if sub.status == SubscriptionStatus.TRIAL and sub.trial_end and sub.trial_end <= as_of:
+                self.subscription_repo.update_status(sub.id, SubscriptionStatus.ACTIVE)
+                trials_activated += 1
+
+        due = self.subscription_repo.get_due_for_billing(as_of)
+
+        for sub in due:
+            plan = self.plan_repo.get(sub.plan_id)
+            customer = self.customer_repo.get(sub.customer_id)
+            strategy = self.strategy_factory(plan)
+            discount = self.discount_factory(sub.discount_id)
+            tax_calc, tax_context = self.tax_factory(customer)
+
+            usage = self.usage_repo.sum_for_period(
+                sub.id, "units", sub.current_period_start, sub.current_period_end
+            )
+            invoice_count = self.invoice_repo.count_for_subscription(sub.id)
+
+            draft = build_invoice(
+                subscription=sub,
+                plan=plan,
+                strategy=strategy,
+                discount=discount,
+                tax_calc=tax_calc,
+                tax_context=tax_context,
+                usage_quantity=usage,
+                period_start=sub.current_period_start,
+                period_end=sub.current_period_end,
+                invoice_count_so_far=invoice_count,
+            )
+
+            draft = type(draft)(
+                id=draft.id,
+                subscription_id=draft.subscription_id,
+                period_start=draft.period_start,
+                period_end=draft.period_end,
+                subtotal=draft.subtotal,
+                discount_total=draft.discount_total,
+                tax_total=draft.tax_total,
+                total=draft.total,
+                status=InvoiceStatus.ISSUED,
+                issued_at=datetime(as_of.year, as_of.month, as_of.day),
+                pdf_path=draft.pdf_path,
+                line_items=draft.line_items
+            )
+
+            try:
+                saved_invoice = self.invoice_repo.add(draft)
+
+                for li in draft.line_items:
+                    new_li = type(li)(
+                        id=li.id,
+                        invoice_id=saved_invoice.id,
+                        description=li.description,
+                        amount=li.amount,
+                        kind=li.kind
+                    )
+                    self.line_item_repo.add(new_li)
+
+                self.ledger_repo.add(LedgerEntry(
+                    id=None,
+                    customer_id=sub.customer_id,
+                    invoice_id=saved_invoice.id,
+                    amount=saved_invoice.total,
+                    direction=LedgerDirection.DEBIT,
+                    reason="Invoice generation",
+                    created_at=as_of
+                ))
+
+                new_start = sub.current_period_end
+                if plan.billing_period == "MONTHLY":
+                    month = new_start.month % 12 + 1
+                    year = new_start.year + (new_start.month // 12)
+                    day = min(new_start.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+                    new_end = date(year, month, day)
+                else:
+                    new_end = new_start.replace(year=new_start.year + 1)
+                    
+                self.subscription_repo.update_period(sub.id, new_start, new_end)
+                
+                invoices_created += 1
+                
+            except sqlite3.IntegrityError:
+                invoices_skipped += 1
+
+        return BillingResult(invoices_created, invoices_skipped, trials_activated)
     # --------------------------------------------------------
     def upgrade_subscription(self, subscription_id: int, new_plan_id: int, switch_date: date) -> None:
         """Mid-cycle upgrade — Day 4 stretch."""
