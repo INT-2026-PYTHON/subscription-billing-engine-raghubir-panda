@@ -159,4 +159,70 @@ class BillingCycle:
     def upgrade_subscription(self, subscription_id: int, new_plan_id: int, switch_date: date) -> None:
         """Mid-cycle upgrade — Day 4 stretch."""
         # TODO Day 4
-        raise NotImplementedError("Day 4: implement BillingCycle.upgrade_subscription")
+
+        from datetime import date, datetime
+        from billing_engine.models import (Invoice, InvoiceStatus, InvoiceLineItem, LineItemKind, LedgerEntry, LedgerDirection)
+        from billing_engine.billing.proration import compute_proration
+        
+        date_today = date.today()
+        with self.subscription_repo.db.transaction() as conn:
+            sub = self.subscription_repo.get(subscription_id)
+            old_plan = self.plan_repo.get(sub.plan_id)
+            new_plan = self.plan_repo.get(new_plan_id)
+            customer = self.customer_repo.get(sub.customer_id)
+            
+            old_price = old_plan.price  
+            new_price = new_plan.price
+            
+            proration = compute_proration(
+                start=sub.current_period_start,
+                end=sub.current_period_end,
+                as_of=date_today,
+                old_price=old_price,
+                new_price=new_price
+            )
+            
+            draft_invoice = Invoice(
+                id=None,
+                subscription_id=sub.id,
+                period_start=sub.current_period_start,
+                period_end=sub.current_period_end,
+                subtotal=proration.net_amount,
+                discount_total=None,
+                tax_total=None,
+                total=proration.net_amount,
+                status=InvoiceStatus.ISSUED,
+                issued_at=datetime.combine(date_today, datetime.min.time()),
+                pdf_path=None
+            )
+            saved_invoice = self.invoice_repo.add(draft_invoice)
+            
+            self.line_item_repo.add(InvoiceLineItem(
+                id=None,
+                invoice_id=saved_invoice.id,
+                description=f"Proration credit for unused {old_plan.name}",
+                amount=proration.credit,
+                kind=LineItemKind.PRORATION_CREDIT
+            ))
+            
+            self.line_item_repo.add(InvoiceLineItem(
+                id=None,
+                invoice_id=saved_invoice.id,
+                description=f"Proration charge for {new_plan.name}",
+                amount=proration.charge,
+                kind=LineItemKind.PRORATION_CHARGE
+            ))
+            
+            self.ledger_repo.add(LedgerEntry(
+                id=None,
+                customer_id=sub.customer_id,
+                invoice_id=saved_invoice.id,
+                amount=proration.net_amount,
+                direction=LedgerDirection.DEBIT,
+                reason=f"Mid-cycle upgrade from {old_plan.name} to {new_plan.name}",
+                created_at=date_today
+            ))
+            
+            self.subscription_repo.update_plan(sub.id, new_plan_id)
+            
+            return saved_invoice

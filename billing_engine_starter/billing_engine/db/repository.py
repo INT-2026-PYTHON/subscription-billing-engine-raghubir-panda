@@ -496,17 +496,20 @@ class InvoiceRepository:
     def mark_paid(self, invoice_id: int) -> None:
         # TODO Day 4.
         # Hint: q.update_invoice_status(..., "PAID")
-        raise NotImplementedError("Day 4: implement InvoiceRepository.mark_paid")
+        with self.db.transaction() as conn:
+            q.update_invoice_status(conn, invoice_id, "PAID")
 
     def mark_failed(self, invoice_id: int) -> None:
         # TODO Day 4.
         # Hint: q.update_invoice_status(..., "FAILED")
-        raise NotImplementedError("Day 4: implement InvoiceRepository.mark_failed")
+        with self.db.transaction() as conn:
+            q.update_invoice_status(conn, invoice_id, "FAILED")
 
     def set_pdf_path(self, invoice_id: int, path: str) -> None:
         # TODO Day 4.
         # Hint: q.update_invoice_pdf_path(...)
-        raise NotImplementedError("Day 4: implement InvoiceRepository.set_pdf_path")
+        with self.db.transaction() as conn:
+            q.update_invoice_pdf_path(conn, invoice_id, path)
 
 
 class InvoiceLineItemRepository:
